@@ -2,6 +2,7 @@ import datetime
 import hmac
 import hashlib
 import asyncio
+from xml.etree.ElementTree import fromstring as parse_xml
 from functools import partial
 from urllib.parse import quote
 
@@ -10,6 +11,32 @@ import aiohttp
 
 amz_uriencode = partial(quote, safe='~')
 amz_uriencode_slash = partial(quote, safe='~/')
+S3_NS = 'http://s3.amazonaws.com/doc/2006-03-01/'
+NS = {'s3': S3_NS}
+
+
+class Key(object):
+
+    def __init__(self, *, key, last_modified, etag, size, storage_class):
+        self.key = key
+        self.last_modified = last_modified
+        self.etag = etag
+        self.size = size
+        self.storage_class = storage_class
+
+    @classmethod
+    def from_xml(Key, el):
+        return Key(
+            key=el.find('s3:Key', namespaces=NS).text,
+            last_modified=datetime.datetime.strptime(
+                el.find('s3:LastModified', namespaces=NS).text,
+                '%Y-%m-%dT%H:%M:%S.000Z'),
+            etag=el.find('s3:ETag', namespaces=NS).text,
+            size=int(el.find('s3:Size', namespaces=NS).text),
+            storage_class=el.find('s3:StorageClass', namespaces=NS).text)
+
+    def __repr__(self):
+        return '<Key {}:{}>'.format(self.key, self.size)
 
 
 class Request(object):
@@ -120,7 +147,40 @@ class Bucket(object):
             {'Host': self._host},
             b'',
             ))
-        print("RESULT", result, (yield from result.read()))
+        data = (yield from result.read())
+        if result.status != 200:
+            # TODO(tailhook) more fine-grained errors
+            raise RuntimeError(data)
+        x = parse_xml(data)
+        if x.find('s3:IsTruncated', namespaces=NS).text != 'false':
+            raise AssertionError(
+                "File list is truncated, use bigger max_keys")
+        return list(map(Key.from_xml,
+                        x.findall('s3:Contents', namespaces=NS)))
+
+    @asyncio.coroutine
+    def download(self, key):
+        if isinstance(key, Key):
+            key = key.key
+        result = yield from self._request(Request(
+            "GET", '/' + key, {}, {'Host': self._host}, b''))
+        if result.status != 200:
+            # TODO(tailhook) more fine-grained errors
+            raise RuntimeError((yield from result.read()))
+        return result.content
+
+    @asyncio.coroutine
+    def get(self, key):
+        if isinstance(key, Key):
+            key = key.key
+        result = yield from self._request(Request(
+            "GET", '/' + key, {}, {'Host': self._host}, b''))
+        if result.status != 200:
+            # TODO(tailhook) more fine-grained errors
+            raise RuntimeError((yield from result.read()))
+        data = yield from result.read()
+        return data
+
 
     @asyncio.coroutine
     def _request(self, req):
