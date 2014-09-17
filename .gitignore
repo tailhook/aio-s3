@@ -1,3 +1,6 @@
 /.vagga
 /test.py
 __pycache__
+
+/dist
+/MANIFEST

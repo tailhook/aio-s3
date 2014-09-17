@@ -11,7 +11,7 @@ setup(name='aio-s3',
       packages=[
           'aios3',
       ],
-      install_requires=['aiohttp'],
+      requires=['aiohttp'],
       classifiers=[
           'Development Status :: 4 - Beta',
           'Programming Language :: Python :: 3',
