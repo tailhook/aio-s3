@@ -137,12 +137,11 @@ class Bucket(object):
         self._host = self._name + '.' + aws_endpoint
 
     @asyncio.coroutine
-    def list(self, prefix='', delimiter='', max_keys=1000):
+    def list(self, prefix='', max_keys=1000):
         result = yield from self._request(Request(
             "GET",
             "/",
             {'prefix': prefix,
-             'delimiter': delimiter,
              'max-keys': str(max_keys)},
             {'Host': self._host},
             b'',

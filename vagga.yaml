@@ -7,10 +7,3 @@ containers:
     provision: |
       pip install aiohttp
 
-commands:
-
-  check:
-    container: test
-    command:
-    - python3
-    - test.py
