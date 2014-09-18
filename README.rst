@@ -15,29 +15,31 @@ Example
 
 Basically all methods supported so far are shown in this example:
 
-.. code-block:: yaml
+.. code-block:: python
 
     import asyncio
-
     from aios3.bucket import Bucket
-
 
     @asyncio.coroutine
     def main():
-        bucket = Bucket('uaprom-logs',
+        bucket = Bucket('some-bucket-name',
             aws_region='eu-west-1',
             aws_endpoint='s3-eu-west-1.amazonaws.com',
             aws_key='AKIAIOSFODNN7EXAMPLE',
             aws_secret='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY')
+            
         # List keys based on prefix
         lst = yield from bu.list('some-prefix')
+        
+        # Get contents file as a string
         response = yield from bu.get(lst[0])
         print(len(response))
+        
+        # Get file contents by chunks
         response = yield from bu.download(lst[0])
-        print("GOT Response", dir(response))
         while 1:
             chunk = yield from response.read(65536)
-            print("Received", len(chunk))
+            print("Got chunk of ", len(chunk), "bytes")
             if not chunk:
                 break
 
