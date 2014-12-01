@@ -73,10 +73,13 @@ def sign(req, *,
 
     time = datetime.datetime.utcnow()
     date = time.strftime('%Y%m%d')
-    payloadhash = hashlib.sha256(req.payload).hexdigest()
     timestr = time.strftime('%a, %d %b %Y %H:%M:%S GMT')
     timestr = time.strftime("%Y%m%dT%H%M%SZ")
     req.headers['x-amz-date'] = timestr
+    if isinstance(req.payload, bytes):
+        payloadhash = hashlib.sha256(req.payload).hexdigest()
+    else:
+        payloadhash = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
     req.headers['x-amz-content-sha256'] = payloadhash
 
     signing_key = _signkey(aws_secret, date, aws_region, aws_service)
@@ -169,6 +172,17 @@ class Bucket(object):
         return result.content
 
     @asyncio.coroutine
+    def upload(self, key, data):
+        if isinstance(key, Key):
+            key = key.key
+        result = yield from self._request(Request(
+            "PUT", '/' + key, {}, {'Host': self._host}, payload=data))
+        if result.status != 200:
+            # TODO(tailhook) more fine-grained errors
+            raise RuntimeError((yield from result.read()))
+        return result
+
+    @asyncio.coroutine
     def get(self, key):
         if isinstance(key, Key):
             key = key.key
@@ -180,11 +194,11 @@ class Bucket(object):
         data = yield from result.read()
         return data
 
-
     @asyncio.coroutine
     def _request(self, req):
         sign(req, **self._aws_sign_data)
         return (yield from aiohttp.request(req.verb, req.url,
+            chunked=not isinstance(req.payload, bytes),
             headers=req.headers,
             data=req.payload,
             connector=self._connector))
