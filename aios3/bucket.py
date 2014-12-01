@@ -1,5 +1,6 @@
 import datetime
 import hmac
+import base64
 import hashlib
 import asyncio
 from xml.etree.ElementTree import fromstring as parse_xml
@@ -13,6 +14,10 @@ amz_uriencode = partial(quote, safe='~')
 amz_uriencode_slash = partial(quote, safe='~/')
 S3_NS = 'http://s3.amazonaws.com/doc/2006-03-01/'
 NS = {'s3': S3_NS}
+
+_SIGNATURES = {}
+SIGNATURE_V2 = 'v2'
+SIGNATURE_V4 = 'v4'
 
 
 class Key(object):
@@ -49,6 +54,7 @@ class Request(object):
                                for k, v in query.items()))
         self.headers = headers
         self.payload = payload
+        self.content_md5 = ''
 
     @property
     def url(self):
@@ -68,12 +74,12 @@ def _signkey(key, date, region, service):
     return _hmac(svc_key, b'aws4_request')
 
 
+@partial(_SIGNATURES.setdefault, SIGNATURE_V2)
 def sign(req, *,
-         aws_key, aws_secret, aws_service='s3', aws_region='us-east-1'):
+         aws_key, aws_secret, aws_service='s3', aws_region='us-east-1', **_):
 
     time = datetime.datetime.utcnow()
     date = time.strftime('%Y%m%d')
-    timestr = time.strftime('%a, %d %b %Y %H:%M:%S GMT')
     timestr = time.strftime("%Y%m%dT%H%M%SZ")
     req.headers['x-amz-date'] = timestr
     if isinstance(req.payload, bytes):
@@ -122,12 +128,45 @@ def sign(req, *,
     req.headers['Authorization'] = ahdr
 
 
+def _hmac_old(key, val):
+    return hmac.new(key, val, hashlib.sha1).digest()
+
+
+@partial(_SIGNATURES.setdefault, SIGNATURE_V4)
+def sign_old(req, aws_key, aws_secret, aws_bucket, **_):
+    time = datetime.datetime.utcnow()
+    timestr = time.strftime("%Y%m%dT%H%M%SZ")
+    req.headers['x-amz-date'] = timestr
+
+    string_to_sign = (
+        '{req.verb}\n'
+        '{cmd5}\n'
+        '{ctype}\n'
+        '\n'  # date, we use x-amz-date
+        '{headers}\n'
+        '{resource}'
+        ).format(
+            req=req,
+            cmd5=req.headers.get('CONTENT-MD5', '') or '',
+            ctype=req.headers.get('CONTENT-TYPE', '') or '',
+            headers='\n'.join(k.lower() + ':' + req.headers[k].strip()
+                for k in sorted(req.headers)
+                if k.lower().startswith('x-amz-')),
+            resource='/' + aws_bucket + req.resource)
+    sig = base64.b64encode(
+        _hmac_old(aws_secret.encode('ascii'), string_to_sign.encode('ascii'))
+        ).decode('ascii')
+    ahdr = 'AWS {key}:{sig}'.format(key=aws_key, sig=sig)
+    req.headers['Authorization'] = ahdr
+
+
 class Bucket(object):
 
     def __init__(self, name, *,
                  aws_key, aws_secret,
                  aws_region='us-east-1',
                  aws_endpoint='s3.amazonaws.com',
+                 signature=SIGNATURE_V4,
                  connector=None):
         self._name = name
         self._connector = None
@@ -136,8 +175,10 @@ class Bucket(object):
             'aws_secret': aws_secret,
             'aws_region': aws_region,
             'aws_service': 's3',
+            'aws_bucket': name,
             }
         self._host = self._name + '.' + aws_endpoint
+        self._signature = signature
 
     @asyncio.coroutine
     def list(self, prefix='', max_keys=1000):
@@ -196,7 +237,7 @@ class Bucket(object):
 
     @asyncio.coroutine
     def _request(self, req):
-        sign(req, **self._aws_sign_data)
+        _SIGNATURES[self._signature](req, **self._aws_sign_data)
         return (yield from aiohttp.request(req.verb, req.url,
             chunked=not isinstance(req.payload, bytes),
             headers=req.headers,
