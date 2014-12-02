@@ -9,6 +9,8 @@ from urllib.parse import quote
 
 import aiohttp
 
+from . import errors
+
 
 amz_uriencode = partial(quote, safe='~')
 amz_uriencode_slash = partial(quote, safe='~/')
@@ -193,7 +195,7 @@ class Bucket(object):
         data = (yield from result.read())
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
-            raise RuntimeError(data)
+            raise errors.AWSException.from_bytes(data)
         x = parse_xml(data)
         if x.find('s3:IsTruncated', namespaces=NS).text != 'false':
             raise AssertionError(
@@ -209,7 +211,7 @@ class Bucket(object):
             "GET", '/' + key, {}, {'Host': self._host}, b''))
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
-            raise RuntimeError((yield from result.read()))
+            raise errors.AWSException.from_bytes((yield from result.read()))
         return result.content
 
     @asyncio.coroutine
@@ -220,7 +222,7 @@ class Bucket(object):
             "PUT", '/' + key, {}, {'Host': self._host}, payload=data))
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
-            raise RuntimeError((yield from result.read()))
+            raise errors.AWSException.from_bytes((yield from result.read()))
         return result
 
     @asyncio.coroutine
@@ -231,7 +233,7 @@ class Bucket(object):
             "GET", '/' + key, {}, {'Host': self._host}, b''))
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
-            raise RuntimeError((yield from result.read()))
+            raise errors.AWSException.from_bytes((yield from result.read()))
         data = yield from result.read()
         return data
 
