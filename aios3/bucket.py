@@ -60,7 +60,7 @@ class Request(object):
 
     @property
     def url(self):
-        return 'http://{0.headers[Host]}{0.resource}?{0.query_string}'\
+        return 'http://{0.headers[HOST]}{0.resource}?{0.query_string}'\
             .format(self)
 
 
@@ -189,7 +189,7 @@ class Bucket(object):
             "/",
             {'prefix': prefix,
              'max-keys': str(max_keys)},
-            {'Host': self._host},
+            {'HOST': self._host},
             b'',
             ))
         data = (yield from result.read())
@@ -208,18 +208,22 @@ class Bucket(object):
         if isinstance(key, Key):
             key = key.key
         result = yield from self._request(Request(
-            "GET", '/' + key, {}, {'Host': self._host}, b''))
+            "GET", '/' + key, {}, {'HOST': self._host}, b''))
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
             raise errors.AWSException.from_bytes((yield from result.read()))
         return result.content
 
     @asyncio.coroutine
-    def upload(self, key, data):
+    def upload(self, key, data, content_type='application/octed-stream'):
         if isinstance(key, Key):
             key = key.key
-        result = yield from self._request(Request(
-            "PUT", '/' + key, {}, {'Host': self._host}, payload=data))
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        result = yield from self._request(Request("PUT", '/' + key, {}, {
+            'HOST': self._host,
+            'CONTENT-TYPE': content_type,
+            }, payload=data))
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
             raise errors.AWSException.from_bytes((yield from result.read()))
@@ -230,7 +234,7 @@ class Bucket(object):
         if isinstance(key, Key):
             key = key.key
         result = yield from self._request(Request(
-            "GET", '/' + key, {}, {'Host': self._host}, b''))
+            "GET", '/' + key, {}, {'HOST': self._host}, b''))
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
             raise errors.AWSException.from_bytes((yield from result.read()))
@@ -240,6 +244,8 @@ class Bucket(object):
     @asyncio.coroutine
     def _request(self, req):
         _SIGNATURES[self._signature](req, **self._aws_sign_data)
+        if isinstance(req.payload, bytes):
+            req.headers['CONTENT-LENGTH'] = str(len(req.payload))
         return (yield from aiohttp.request(req.verb, req.url,
             chunked=not isinstance(req.payload, bytes),
             headers=req.headers,
