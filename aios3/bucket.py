@@ -212,7 +212,7 @@ class Bucket(object):
         if result.status != 200:
             # TODO(tailhook) more fine-grained errors
             raise errors.AWSException.from_bytes((yield from result.read()))
-        return result.content
+        return result
 
     @asyncio.coroutine
     def upload(self, key, data, content_type='application/octed-stream'):
@@ -224,10 +224,14 @@ class Bucket(object):
             'HOST': self._host,
             'CONTENT-TYPE': content_type,
             }, payload=data))
-        if result.status != 200:
-            # TODO(tailhook) more fine-grained errors
-            raise errors.AWSException.from_bytes((yield from result.read()))
-        return result
+        try:
+            if result.status != 200:
+                # TODO(tailhook) more fine-grained errors
+                xml = yield from result.read()
+                raise errors.AWSException.from_bytes(xml)
+            return result
+        finally:
+            result.close()
 
     @asyncio.coroutine
     def get(self, key):
