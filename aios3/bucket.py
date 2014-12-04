@@ -234,6 +234,20 @@ class Bucket(object):
             result.close()
 
     @asyncio.coroutine
+    def delete(self, key):
+        if isinstance(key, Key):
+            key = key.key
+        result = yield from self._request(Request("DELETE", '/' + key, {},
+            {'HOST': self._host}, b''))
+        try:
+            if result.status != 204:
+                xml = yield from result.read()
+                raise errors.AWSException.from_bytes(xml)
+            return result
+        finally:
+            result.close()
+
+    @asyncio.coroutine
     def get(self, key):
         if isinstance(key, Key):
             key = key.key
