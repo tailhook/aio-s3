@@ -194,8 +194,7 @@ class Bucket(object):
             ))
         data = (yield from result.read())
         if result.status != 200:
-            # TODO(tailhook) more fine-grained errors
-            raise errors.AWSException.from_bytes(data)
+            raise errors.AWSException.from_bytes(result.status, data)
         x = parse_xml(data)
         if x.find('s3:IsTruncated', namespaces=NS).text != 'false':
             raise AssertionError(
@@ -210,8 +209,8 @@ class Bucket(object):
         result = yield from self._request(Request(
             "GET", '/' + key, {}, {'HOST': self._host}, b''))
         if result.status != 200:
-            # TODO(tailhook) more fine-grained errors
-            raise errors.AWSException.from_bytes((yield from result.read()))
+            raise errors.AWSException.from_bytes(
+                result.status, (yield from result.read()))
         return result
 
     @asyncio.coroutine
@@ -226,9 +225,8 @@ class Bucket(object):
             }, payload=data))
         try:
             if result.status != 200:
-                # TODO(tailhook) more fine-grained errors
                 xml = yield from result.read()
-                raise errors.AWSException.from_bytes(xml)
+                raise errors.AWSException.from_bytes(result.status, xml)
             return result
         finally:
             result.close()
@@ -242,7 +240,7 @@ class Bucket(object):
         try:
             if result.status != 204:
                 xml = yield from result.read()
-                raise errors.AWSException.from_bytes(xml)
+                raise errors.AWSException.from_bytes(result.status, xml)
             return result
         finally:
             result.close()
@@ -254,8 +252,8 @@ class Bucket(object):
         result = yield from self._request(Request(
             "GET", '/' + key, {}, {'HOST': self._host}, b''))
         if result.status != 200:
-            # TODO(tailhook) more fine-grained errors
-            raise errors.AWSException.from_bytes((yield from result.read()))
+            raise errors.AWSException.from_bytes(
+                result.status, (yield from result.read()))
         data = yield from result.read()
         return data
 

@@ -5,7 +5,11 @@ class AWSException(Exception):
     """Base for exceptions returned by amazon"""
 
     @staticmethod
-    def from_bytes(body):
+    def from_bytes(status, body):
+        if not body:
+            # sometimes Riak CS doesn't have response body :(
+            # TODO(tailhook) maybe use status to create specific error?
+            raise RuntimeError("HTTP Error {}".format(status))
         try:
             xml = parse_xml(body)
         except ParseError:
