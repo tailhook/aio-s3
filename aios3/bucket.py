@@ -183,6 +183,24 @@ class Bucket(object):
         self._signature = signature
 
     @asyncio.coroutine
+    def exists(self, prefix=''):
+        result = yield from self._request(Request(
+            "GET",
+            "/",
+            {'prefix': prefix,
+             'separator': '/',
+             'max-keys': '1'},
+            {'HOST': self._host},
+            b'',
+            ))
+        data = (yield from result.read())
+        if result.status != 200:
+            raise errors.AWSException.from_bytes(result.status, data)
+        x = parse_xml(data)
+        return any(map(Key.from_xml,
+                        x.findall('s3:Contents', namespaces=NS)))
+
+    @asyncio.coroutine
     def list(self, prefix='', max_keys=1000):
         result = yield from self._request(Request(
             "GET",
