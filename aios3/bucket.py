@@ -297,7 +297,7 @@ class Bucket(object):
         if isinstance(req.payload, bytes):
             req.headers['CONTENT-LENGTH'] = str(len(req.payload))
         return (yield from aiohttp.request(req.verb, req.url,
-            chunked=not isinstance(req.payload, bytes),
+            chunked='CONTENT-LENGTH' not in req.headers,
             headers=req.headers,
             data=req.payload,
             connector=self._connector))
