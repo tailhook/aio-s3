@@ -232,15 +232,31 @@ class Bucket(object):
         return result
 
     @asyncio.coroutine
-    def upload(self, key, data, content_type='application/octed-stream'):
+    def upload(self, key, data,
+            content_length=None,
+            content_type='application/octed-stream'):
+        """Upload file to S3
+
+        The `data` might be a generator or stream.
+
+        the `content_length` is unchecked so it's responsibility of user to
+        ensure that it matches data.
+
+        Note: Riak CS doesn't allow to upload files without content_length.
+        """
+
         if isinstance(key, Key):
             key = key.key
         if isinstance(data, str):
             data = data.encode('utf-8')
-        result = yield from self._request(Request("PUT", '/' + key, {}, {
+        headers = {
             'HOST': self._host,
             'CONTENT-TYPE': content_type,
-            }, payload=data))
+            }
+        if content_length is not None:
+            headers['CONTENT-LENGTH'] = str(content_length)
+        result = yield from self._request(Request("PUT", '/' + key, {},
+            headers=headers, payload=data))
         try:
             if result.status != 200:
                 xml = yield from result.read()
