@@ -4,6 +4,8 @@ import base64
 import hashlib
 import asyncio
 from xml.etree.ElementTree import fromstring as parse_xml
+from xml.etree.ElementTree import tostring as xml_tostring
+from xml.etree.ElementTree import Element, SubElement
 from functools import partial
 from urllib.parse import quote
 
@@ -20,6 +22,11 @@ NS = {'s3': S3_NS}
 _SIGNATURES = {}
 SIGNATURE_V2 = 'v2'
 SIGNATURE_V4 = 'v4'
+SIG_V2_SUBRESOURCES = {
+    'acl', 'lifecycle', 'location', 'logging', 'notification',
+    'partNumber', 'policy', 'requestPayment', 'torrent', 'uploadId',
+    'uploads', 'versionId', 'versioning', 'versions', 'website'
+    }
 
 
 class Key(object):
@@ -50,8 +57,8 @@ class Request(object):
     def __init__(self, verb, resource, query, headers, payload):
         self.verb = verb
         self.resource = amz_uriencode_slash(resource)
-        self.query_string = '&'.join(
-            k + '=' + v
+        self.params = query
+        self.query_string = '&'.join(k + '=' + v
             for k, v in sorted((amz_uriencode(k), amz_uriencode(v))
                                for k, v in query.items()))
         self.headers = headers
@@ -60,7 +67,7 @@ class Request(object):
 
     @property
     def url(self):
-        return 'http://{0.headers[HOST]}{0.resource}?{0.query_string}'\
+        return 'http://{0.headers[HOST]}{0.resource}?{0.query_string}' \
             .format(self)
 
 
@@ -76,8 +83,8 @@ def _signkey(key, date, region, service):
     return _hmac(svc_key, b'aws4_request')
 
 
-@partial(_SIGNATURES.setdefault, SIGNATURE_V2)
-def sign(req, *,
+@partial(_SIGNATURES.setdefault, SIGNATURE_V4)
+def sign_v4(req, *,
          aws_key, aws_secret, aws_service='s3', aws_region='us-east-1', **_):
 
     time = datetime.datetime.utcnow()
@@ -134,11 +141,18 @@ def _hmac_old(key, val):
     return hmac.new(key, val, hashlib.sha1).digest()
 
 
-@partial(_SIGNATURES.setdefault, SIGNATURE_V4)
-def sign_old(req, aws_key, aws_secret, aws_bucket, **_):
+@partial(_SIGNATURES.setdefault, SIGNATURE_V2)
+def sign_v2(req, aws_key, aws_secret, aws_bucket, **_):
     time = datetime.datetime.utcnow()
     timestr = time.strftime("%Y%m%dT%H%M%SZ")
     req.headers['x-amz-date'] = timestr
+
+    subresource = '&'.join(sorted(
+        (k + '=' + v) if v else k
+        for k, v in req.params.items()
+        if k in SIG_V2_SUBRESOURCES))
+    if subresource:
+        subresource = '?' + subresource
 
     string_to_sign = (
         '{req.verb}\n'
@@ -154,12 +168,92 @@ def sign_old(req, aws_key, aws_secret, aws_bucket, **_):
             headers='\n'.join(k.lower() + ':' + req.headers[k].strip()
                 for k in sorted(req.headers)
                 if k.lower().startswith('x-amz-')),
-            resource='/' + aws_bucket + req.resource)
+            resource='/' + aws_bucket + req.resource + subresource)
     sig = base64.b64encode(
         _hmac_old(aws_secret.encode('ascii'), string_to_sign.encode('ascii'))
         ).decode('ascii')
     ahdr = 'AWS {key}:{sig}'.format(key=aws_key, sig=sig)
     req.headers['Authorization'] = ahdr
+
+
+class MultipartUpload(object):
+
+    def __init__(self, bucket, key, upload_id):
+        self.bucket = bucket
+        self.key = key
+        self.upload_id = upload_id
+        self.xml = Element('CompleteMultipartUpload')
+        self.parts = 0
+        self._done = False
+        self._uri = '/' + self.key + '?uploadId=' + self.upload_id
+
+    def add_chunk(self, data):
+        assert isinstance(data, (bytes, memoryview, bytearray)), data
+
+        # figure out how to check chunk size, all but last one
+        # assert len(data) > 5 << 30, "Chunk must be at least 5Mb"
+
+        if self._done:
+            raise RuntimeError("Can't add_chunk after commit or close")
+        self.parts += 1
+        result = yield from self.bucket._request(Request("PUT",
+            '/' + self.key, {
+                'uploadId': self.upload_id,
+                'partNumber': str(self.parts),
+            }, headers={
+                'CONTENT-LENGTH': str(len(data)),
+                'HOST': self.bucket._host,
+                # next one aiohttp adds for us anyway, so we must put it here
+                # so it's added into signature
+                'CONTENT-TYPE': 'application/octed-stream',
+            }, payload=data))
+        try:
+            if result.status != 200:
+                xml = yield from result.read()
+                raise errors.AWSException.from_bytes(result.status, xml)
+            etag = result.headers['ETAG']
+        finally:
+            result.close()
+        chunk = SubElement(self.xml, 'Part')
+        SubElement(chunk, 'PartNumber').text = str(self.parts)
+        SubElement(chunk, 'ETag').text = etag
+
+    def commit(self):
+        if self._done:
+            raise RuntimeError("Can't commit twice or after close")
+        self._done = True
+        data = xml_tostring(self.xml)
+        result = yield from self.bucket._request(Request("POST",
+            '/' + self.key, {
+                'uploadId': self.upload_id,
+            }, headers={
+                'CONTENT-LENGTH': str(len(data)),
+                'HOST': self.bucket._host,
+                'CONTENT-TYPE': 'application/xml',
+            }, payload=data))
+        try:
+            xml = yield from result.read()
+            if result.status != 200:
+                raise errors.AWSException.from_bytes(result.status, xml)
+            xml = parse_xml(xml)
+            return xml.find('s3:ETag', namespaces=NS)
+        finally:
+            result.close()
+
+    def close(self):
+        if self._done:
+            return
+        self._done = True
+        result = yield from self.bucket._request(Request("DELETE",
+            '/' + self.key, {
+                'uploadId': self.upload_id,
+            }, headers={'HOST': self.bucket._host}, payload=b''))
+        try:
+            xml = yield from result.read()
+            if result.status != 204:
+                raise errors.AWSException.from_bytes(result.status, xml)
+        finally:
+            result.close()
 
 
 class Bucket(object):
@@ -301,3 +395,28 @@ class Bucket(object):
             headers=req.headers,
             data=req.payload,
             connector=self._connector))
+
+    @asyncio.coroutine
+    def upload_multipart(self, key,
+            content_type='application/octed-stream',
+            MultipartUpload=MultipartUpload):
+        """Upload file to S3 by uploading multiple chunks"""
+
+        if isinstance(key, Key):
+            key = key.key
+        result = yield from self._request(Request("POST",
+            '/' + key, {'uploads': ''}, {
+            'HOST': self._host,
+            'CONTENT-TYPE': content_type,
+            }, payload=b''))
+        try:
+            if result.status != 200:
+                xml = yield from result.read()
+                raise errors.AWSException.from_bytes(result.status, xml)
+            xml = yield from result.read()
+            upload_id = parse_xml(xml).find('s3:UploadId',
+                                            namespaces=NS).text
+            assert upload_id, xml
+            return MultipartUpload(self, key, upload_id)
+        finally:
+            result.close()
