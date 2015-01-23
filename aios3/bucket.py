@@ -187,6 +187,7 @@ class MultipartUpload(object):
         self._done = False
         self._uri = '/' + self.key + '?uploadId=' + self.upload_id
 
+    @asyncio.coroutine
     def add_chunk(self, data):
         assert isinstance(data, (bytes, memoryview, bytearray)), data
 
@@ -218,6 +219,7 @@ class MultipartUpload(object):
         SubElement(chunk, 'PartNumber').text = str(self.parts)
         SubElement(chunk, 'ETag').text = etag
 
+    @asyncio.coroutine
     def commit(self):
         if self._done:
             raise RuntimeError("Can't commit twice or after close")
@@ -240,6 +242,7 @@ class MultipartUpload(object):
         finally:
             result.close()
 
+    @asyncio.coroutine
     def close(self):
         if self._done:
             return
