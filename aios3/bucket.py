@@ -315,6 +315,38 @@ class Bucket(object):
                         x.findall('s3:Contents', namespaces=NS)))
 
     @asyncio.coroutine
+    def list_by_chunks(self, prefix='', max_keys=1000):
+        final = False
+        marker = ''
+
+        def read_next():
+            nonlocal final, marker
+            result = yield from self._request(Request(
+                "GET",
+                "/",
+                {'prefix': prefix,
+                 'max-keys': str(max_keys),
+                 'marker': marker},
+                {'HOST': self._host},
+                b'',
+                ))
+            data = (yield from result.read())
+            if result.status != 200:
+                raise errors.AWSException.from_bytes(result.status, data)
+            x = parse_xml(data)
+            result = list(map(Key.from_xml,
+                            x.findall('s3:Contents', namespaces=NS)))
+            if(x.find('s3:IsTruncated', namespaces=NS).text == 'false' or
+                    len(result) == 0):
+                final = True
+            else:
+                marker = result[-1].key
+            return result
+
+        while not final:
+            yield read_next()
+
+    @asyncio.coroutine
     def download(self, key):
         if isinstance(key, Key):
             key = key.key
