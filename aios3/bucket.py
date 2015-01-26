@@ -262,6 +262,7 @@ class MultipartUpload(object):
 class Bucket(object):
 
     def __init__(self, name, *,
+                 port=80,
                  aws_key, aws_secret,
                  aws_region='us-east-1',
                  aws_endpoint='s3.amazonaws.com',
@@ -277,6 +278,8 @@ class Bucket(object):
             'aws_bucket': name,
             }
         self._host = self._name + '.' + aws_endpoint
+        if port != 80:
+            self._host = self._host + ':' + str(port)
         self._signature = signature
 
     @asyncio.coroutine
