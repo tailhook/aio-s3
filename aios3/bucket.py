@@ -317,11 +317,11 @@ class Bucket(object):
         return list(map(Key.from_xml,
                         x.findall('s3:Contents', namespaces=NS)))
 
-    @asyncio.coroutine
     def list_by_chunks(self, prefix='', max_keys=1000):
         final = False
         marker = ''
 
+        @asyncio.coroutine
         def read_next():
             nonlocal final, marker
             result = yield from self._request(Request(
